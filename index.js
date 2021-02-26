@@ -1,4 +1,5 @@
 const express = require('express')
+const bodyParser = require('body-parser')
 const querystring = require('querystring')
 const parseAlgoliaSQL = require('./src/parseAlgoliaSQL')
 const { getIndex, existIndex } = require('./src/indexes')
@@ -9,16 +10,60 @@ const createServer = (options) => {
   const path = options.path || process.cwd()
   const app = express()
 
-  app.use(express.json())
+  app.use(bodyParser.json());
+  app.use(bodyParser.urlencoded({ extended: true }));
+
+  app.post('/1/indexes/:indexName/batch', async (req, res) => {
+    const { body, params: { indexName } } = req
+    const puts = []
+    const deletes = []
+
+    for (const request of body.requests) {
+      switch (request.action) {
+        case 'updateObject':
+          request.body._id = request.body.objectID
+          const obj = {
+            _id: request.body.objectID,
+            ...request.body
+          }
+          
+          delete obj.objectID
+          puts.push(obj)
+          break
+
+        case 'deleteObject':
+          deletes.push(request.body.objectID)
+          break
+
+        default:
+          // not supported
+          return res.status(400).end()
+      }
+    }
+
+    const db = getIndex(indexName, path)
+    if (puts.length) {
+      await db.PUT(puts)
+    }
+    if (deletes.length) {
+      await db.DELETE(deletes)
+    }
+
+    return res.status(201).json({
+      taskID: 'algolite-task-id',
+      objectIDs: body.requests.map(r => r.body.objectID)
+    })
+  })
 
   app.post('/1/indexes/:indexName/query', async (req, res) => {
     const { body, params: { indexName } } = req
     const { params: queryParams } = body
 
+    console.log('SEARCH', indexName, path)
     const db = getIndex(indexName, path)
 
-    const { query, filters } = querystring.parse(queryParams)
-
+    const { query, filters } = body
+    console.log(query, filters)
     const searchExp = []
     if (query !== undefined) {
       searchExp.push(!query ? '*' : query)
